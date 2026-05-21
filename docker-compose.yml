@@ -1,0 +1,21 @@
+version: "3.9"
+
+services:
+  producer:
+    build: ./producer
+    env_file: .env
+    restart: unless-stopped
+
+  consumer:
+    build: ./consumer
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      - producer
+
+  dashboard:
+    build: ./dashboard
+    env_file: .env
+    ports:
+      - "${DASHBOARD_PORT:-8000}:8000"
+    restart: unless-stopped

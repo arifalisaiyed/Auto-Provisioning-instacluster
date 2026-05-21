@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Infra Monitor</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; }
+    .card-header { background: #1e293b; border-bottom: 1px solid #334155; font-weight: 600; }
+    table { color: #e2e8f0; }
+    th { color: #94a3b8; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #334155 !important; }
+    td { border-color: #334155 !important; vertical-align: middle; }
+    .badge-ok   { background: #166534; color: #bbf7d0; }
+    .badge-warn { background: #92400e; color: #fde68a; }
+    .progress { background: #334155; height: 6px; border-radius: 4px; }
+    .countdown { font-size: 0.75rem; color: #64748b; }
+    .action-badge { font-size: 0.7rem; padding: 3px 8px; border-radius: 99px; }
+    .action-restart   { background: #7f1d1d; color: #fca5a5; }
+    .action-clear     { background: #1e3a5f; color: #93c5fd; }
+    .action-hello     { background: #2d1b69; color: #c4b5fd; }
+    .action-scale     { background: #14532d; color: #86efac; }
+
+    /* Tab styles */
+    .nav-tabs { border-bottom: 1px solid #334155; }
+    .nav-tabs .nav-link { color: #94a3b8; border: none; border-bottom: 2px solid transparent; background: none; padding: 0.6rem 1.2rem; }
+    .nav-tabs .nav-link:hover { color: #e2e8f0; border-bottom-color: #475569; }
+    .nav-tabs .nav-link.active { color: #38bdf8; border-bottom-color: #38bdf8; background: none; }
+
+    /* Kafka stream feed */
+    #kafka-feed {
+      background: #0b1120;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      height: 520px;
+      overflow-y: auto;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.78rem;
+      padding: 12px;
+      scroll-behavior: smooth;
+    }
+    .msg-row { padding: 6px 10px; border-radius: 6px; margin-bottom: 4px; border-left: 3px solid #334155; animation: fadeIn 0.3s ease; }
+    .msg-row.anomaly { border-left-color: #f59e0b; background: #1c1408; }
+    .msg-row.normal  { border-left-color: #22c55e; background: #0d1a10; }
+    .msg-time  { color: #475569; margin-right: 10px; }
+    .msg-server { color: #38bdf8; font-weight: 600; margin-right: 8px; }
+    .msg-anom  { color: #f59e0b; font-size: 0.7rem; margin-left: 6px; }
+    .msg-stats { color: #94a3b8; }
+    .msg-val   { color: #e2e8f0; }
+    .stream-status { font-size: 0.75rem; color: #64748b; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+    .dot.connected    { background: #22c55e; animation: pulse 1.5s infinite; }
+    .dot.disconnected { background: #ef4444; }
+    .dot.connecting   { background: #f59e0b; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(-4px)} to{opacity:1;transform:none} }
+  </style>
+</head>
+<body>
+<div class="container-fluid py-4 px-4">
+
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+      <h1 class="h4 mb-0 fw-bold">Infra Monitor</h1>
+      <small class="text-muted">AI-powered infrastructure remediation &bull; NetApp Instaclustr</small>
+    </div>
+    <span class="countdown" id="refresh-countdown">Refreshing in <span id="secs">30</span>s</span>
+  </div>
+
+  <!-- Tab navigation -->
+  <ul class="nav nav-tabs mb-4" id="mainTabs">
+    <li class="nav-item">
+      <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview">
+        Overview
+      </button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link" id="stream-tab" data-bs-toggle="tab" data-bs-target="#stream">
+        Live Kafka Stream
+      </button>
+    </li>
+  </ul>
+
+  <div class="tab-content">
+
+    <!-- ── Tab 1: Overview ──────────────────────────────────────── -->
+    <div class="tab-pane fade show active" id="overview">
+
+      <!-- Server Status -->
+      <div class="card mb-4">
+        <div class="card-header py-3 d-flex justify-content-between">
+          <span>Server Status</span>
+          <span class="badge bg-secondary">{{ servers | length }} servers</span>
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-borderless mb-0">
+            <thead>
+              <tr class="border-bottom">
+                <th class="ps-4">Server</th>
+                <th>Status</th>
+                <th>CPU</th>
+                <th>Memory</th>
+                <th>Disk</th>
+                <th>Net In</th>
+                <th>Net Out</th>
+                <th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in servers %}
+              <tr>
+                <td class="ps-4 fw-semibold">{{ s.server_id }}</td>
+                <td>
+                  {% if s.is_anomaly %}
+                    <span class="badge badge-warn px-2 py-1">ANOMALY</span>
+                  {% else %}
+                    <span class="badge badge-ok px-2 py-1">OK</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="{% if s.cpu_percent > 85 %}text-warning{% endif %}">{{ "%.1f"|format(s.cpu_percent) }}%</span>
+                    <div class="progress flex-grow-1" style="min-width:60px">
+                      <div class="progress-bar {% if s.cpu_percent > 85 %}bg-warning{% else %}bg-success{% endif %}"
+                           style="width:{{ s.cpu_percent }}%"></div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="{% if s.memory_percent > 90 %}text-warning{% endif %}">{{ "%.1f"|format(s.memory_percent) }}%</span>
+                    <div class="progress flex-grow-1" style="min-width:60px">
+                      <div class="progress-bar {% if s.memory_percent > 90 %}bg-warning{% else %}bg-info{% endif %}"
+                           style="width:{{ s.memory_percent }}%"></div>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="{% if s.disk_percent > 95 %}text-danger{% endif %}">{{ "%.1f"|format(s.disk_percent) }}%</span>
+                    <div class="progress flex-grow-1" style="min-width:60px">
+                      <div class="progress-bar {% if s.disk_percent > 95 %}bg-danger{% else %}bg-primary{% endif %}"
+                           style="width:{{ s.disk_percent }}%"></div>
+                    </div>
+                  </div>
+                </td>
+                <td class="text-muted small">{{ (s.bytes_in / 1_000_000) | round(1) }} MB</td>
+                <td class="text-muted small">{{ (s.bytes_out / 1_000_000) | round(1) }} MB</td>
+                <td class="text-muted small">{{ s.last_seen }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="8" class="text-center py-4 text-muted">No data yet — waiting for first producer run...</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Action History -->
+      <div class="card">
+        <div class="card-header py-3 d-flex justify-content-between">
+          <span>Remediation Action History</span>
+          <span class="badge bg-secondary">last 20</span>
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-borderless mb-0">
+            <thead>
+              <tr class="border-bottom">
+                <th class="ps-4">Time</th>
+                <th>Server</th>
+                <th>Triggered By</th>
+                <th>Action Taken</th>
+                <th>Diagnosis</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for a in actions %}
+              <tr>
+                <td class="ps-4 text-muted small">{{ a.actioned_at_str }}</td>
+                <td class="fw-semibold">{{ a.server_id }}</td>
+                <td><span class="badge bg-secondary">{{ a.triggered_by }}</span></td>
+                <td>
+                  {% if a.action_taken == "restart_server" %}
+                    <span class="action-badge action-restart">restart_server</span>
+                  {% elif a.action_taken == "clear_temp_files" %}
+                    <span class="action-badge action-clear">clear_temp_files</span>
+                  {% elif a.action_taken == "run_hello_world_script" %}
+                    <span class="action-badge action-hello">run_hello_world_script</span>
+                  {% else %}
+                    <span class="action-badge action-scale">scale_up_resources</span>
+                  {% endif %}
+                </td>
+                <td class="text-muted small" style="max-width:400px">{{ a.diagnosis_short }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="5" class="text-center py-4 text-muted">No remediation actions yet — thresholds not yet breached.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /overview -->
+
+    <!-- ── Tab 2: Live Kafka Stream ─────────────────────────────── -->
+    <div class="tab-pane fade" id="stream">
+      <div class="card">
+        <div class="card-header py-3 d-flex justify-content-between align-items-center">
+          <span>Live Kafka Stream &mdash; <code style="font-size:0.8rem;color:#94a3b8">server-stats</code></span>
+          <div class="d-flex align-items-center gap-3">
+            <span class="stream-status">
+              <span class="dot connecting" id="stream-dot"></span>
+              <span id="stream-status-text">Connecting…</span>
+            </span>
+            <span class="badge bg-secondary" id="msg-count">0 messages</span>
+            <button class="btn btn-sm btn-outline-secondary py-0" id="clear-btn">Clear</button>
+            <button class="btn btn-sm btn-outline-secondary py-0" id="pause-btn">Pause</button>
+          </div>
+        </div>
+        <div class="card-body p-3">
+          <div id="kafka-feed">
+            <div style="color:#475569;padding:8px">Waiting for messages — producer publishes every 5 minutes…</div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /stream -->
+
+  </div><!-- /tab-content -->
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  // ── Countdown / auto-reload (paused on stream tab) ──────────────
+  let secs = 30;
+  let reloadPaused = false;
+  const secsEl  = document.getElementById("secs");
+  const cntDown = document.getElementById("refresh-countdown");
+
+  document.getElementById("stream-tab").addEventListener("shown.bs.tab", () => {
+    reloadPaused = true;
+    cntDown.style.display = "none";
+    startStream();
+  });
+  document.getElementById("overview-tab").addEventListener("shown.bs.tab", () => {
+    reloadPaused = false;
+    secs = 30;
+    secsEl.textContent = secs;
+    cntDown.style.display = "";
+    stopStream();
+  });
+
+  setInterval(() => {
+    if (reloadPaused) return;
+    secs--;
+    if (secs <= 0) { window.location.reload(); }
+    else { secsEl.textContent = secs; }
+  }, 1000);
+
+  // ── Kafka SSE stream ─────────────────────────────────────────────
+  let evtSource = null;
+  let msgCount  = 0;
+  let paused    = false;
+  const feed       = document.getElementById("kafka-feed");
+  const dot        = document.getElementById("stream-dot");
+  const statusText = document.getElementById("stream-status-text");
+  const countBadge = document.getElementById("msg-count");
+  const MAX_ROWS   = 200;
+
+  function setDot(state) {
+    dot.className = "dot " + state;
+    const labels = { connected: "Connected", disconnected: "Disconnected", connecting: "Connecting…" };
+    statusText.textContent = labels[state] || state;
+  }
+
+  function fmtBytes(b) {
+    if (b >= 1_000_000) return (b / 1_000_000).toFixed(1) + " MB";
+    if (b >= 1_000)     return (b / 1_000).toFixed(1) + " KB";
+    return b + " B";
+  }
+
+  function appendMessage(data) {
+    if (paused) return;
+
+    // Remove placeholder
+    const placeholder = feed.querySelector("[data-placeholder]");
+    if (placeholder) placeholder.remove();
+
+    const ts = data.collected_at
+      ? data.collected_at.replace("T", " ").replace("Z", " UTC")
+      : new Date().toISOString().replace("T", " ").replace("Z", " UTC");
+
+    const isAnom = data.is_anomaly;
+    const row = document.createElement("div");
+    row.className = "msg-row " + (isAnom ? "anomaly" : "normal");
+    row.innerHTML =
+      `<span class="msg-time">${ts}</span>` +
+      `<span class="msg-server">${data.server_id}</span>` +
+      (isAnom ? `<span class="msg-anom">⚠ ${data.anomaly_type || "anomaly"}</span>` : "") +
+      `<span class="msg-stats">` +
+        ` &nbsp;CPU <span class="msg-val">${data.cpu_percent?.toFixed(1)}%</span>` +
+        ` &nbsp;MEM <span class="msg-val">${data.memory_percent?.toFixed(1)}%</span>` +
+        ` &nbsp;DISK <span class="msg-val">${data.disk_percent?.toFixed(1)}%</span>` +
+        ` &nbsp;IN <span class="msg-val">${fmtBytes(data.bytes_in ?? 0)}</span>` +
+        ` &nbsp;OUT <span class="msg-val">${fmtBytes(data.bytes_out ?? 0)}</span>` +
+      `</span>`;
+
+    feed.prepend(row);
+
+    // Cap DOM size
+    while (feed.children.length > MAX_ROWS) {
+      feed.removeChild(feed.lastChild);
+    }
+
+    msgCount++;
+    countBadge.textContent = msgCount + " message" + (msgCount !== 1 ? "s" : "");
+  }
+
+  function startStream() {
+    if (evtSource) return;
+    setDot("connecting");
+    evtSource = new EventSource("/stream/kafka");
+
+    evtSource.onopen = () => setDot("connected");
+
+    evtSource.onmessage = (e) => {
+      try { appendMessage(JSON.parse(e.data)); }
+      catch (_) {}
+    };
+
+    evtSource.onerror = () => {
+      setDot("disconnected");
+      evtSource.close();
+      evtSource = null;
+      // Reconnect after 3s
+      setTimeout(() => { if (reloadPaused) startStream(); }, 3000);
+    };
+  }
+
+  function stopStream() {
+    if (evtSource) { evtSource.close(); evtSource = null; }
+    setDot("connecting");
+  }
+
+  document.getElementById("clear-btn").addEventListener("click", () => {
+    feed.innerHTML = "";
+    msgCount = 0;
+    countBadge.textContent = "0 messages";
+  });
+
+  document.getElementById("pause-btn").addEventListener("click", (e) => {
+    paused = !paused;
+    e.target.textContent = paused ? "Resume" : "Pause";
+    e.target.classList.toggle("btn-warning", paused);
+    e.target.classList.toggle("btn-outline-secondary", !paused);
+  });
+</script>
+</body>
+</html>
